@@ -1,0 +1,184 @@
+#!/usr/bin/python -u
+#
+# CS3700, Spring 2015
+# Project 2 Starter Code
+#
+
+'''
+What does the sender need to know
+1.  sequence number - given, add on as we send more data
+2.  data - given in tests
+3.  how big the window is - 1500
+4.
+In packet
+1. data
+2. acknowledgement number
+3. sequence number
+4. flags
+JSON that represents acknowledgement:
+1. sequence number
+2. random id
+'''
+
+import sys
+import socket
+import time
+import datetime
+import select
+import json
+
+MSG_SIZE = 1500
+DATA_SIZE = 250
+TIMEOUT = 15
+SEQUENCE = 0
+
+# Bind to localhost and an ephemeral port
+IP_PORT = sys.argv[1]
+UDP_IP = IP_PORT[0:IP_PORT.find(":")]
+UDP_PORT = int(IP_PORT[IP_PORT.find(":")+1:])
+dest = (UDP_IP, UDP_PORT)
+
+# Set up the socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(TIMEOUT)
+
+all_recieved = False
+
+
+def log(string):
+    sys.stderr.write(datetime.datetime.now().strftime(
+        "%H:%M:%S.%f") + " " + string + "\n")
+
+
+sent_packets = {}
+sent_packets_time = {}
+recv_acks = []
+last_sent = 0
+
+
+def send_next_packet():
+    global SEQUENCE
+    global last_sent
+
+    data = sys.stdin.read(DATA_SIZE)
+
+    if (len(data) > 0):
+        msg = json.dumps({"sequence": SEQUENCE, "data": data,
+                          "ack": False, "eof": False})
+        now = datetime.datetime.now()
+        seconds = (now.hour * 60 + now.minute) * 60 + now.second
+        sent_packets[SEQUENCE] = msg
+        sent_packets_time[SEQUENCE] = seconds
+        last_sent = seconds
+        SEQUENCE += len(data)
+        if sock.sendto(msg, dest) < len(msg):
+            log("[error] unable to fully send packet")
+        else:
+            log("[send data] " + str(SEQUENCE) + " (" + str(len(data)) + ")")
+        return True
+    else:
+        return False
+
+
+def resend():
+    print("resending")
+    global SEQUENCE
+    global last_sent
+
+    print("sent packets not acked: " + str(list(sent_packets.keys())))
+    for packet in sent_packets:
+      now = datetime.datetime.now()
+      seconds = (now.hour * 60 + now.minute) * 60 + now.second
+      sent_packets_time[SEQUENCE] = seconds
+      last_sent = seconds
+      print("packet " + str(packet))
+      SEQUENCE = packet
+      if sock.sendto(sent_packets[packet], dest) < len(sent_packets[packet]):
+          log("[error] unable to fully send packet")
+      else:
+          log("[send data] " + str(SEQUENCE) +
+              " (" + str(len(json.loads(sent_packets[packet])["data"])) + ")")
+
+
+def check_for_dropped():
+    global SEQUENCE
+    global last_sent
+    for sent in sent_packets:
+        if int(sent) + DATA_SIZE not in recv_acks:
+            return True
+    return False
+
+
+def run():
+    global SEQUENCE
+    global last_sent
+    global all_recieved
+    # sends all packets
+
+    # Now read in data, send packets
+
+    now = datetime.datetime.now()
+    seconds = (now.hour * 60 + now.minute) * 60 + now.second
+
+    while seconds < last_sent + TIMEOUT:
+        print("sent packets: " + str(list(sent_packets.keys())))
+        log("ABOUT TO SLEEP")
+        try:
+          result = sock.recvfrom(MSG_SIZE)
+
+          log("result" + str(result))
+
+          if result:
+            (data, addr) = result
+
+            try:
+                decoded = json.loads(data)
+                recv_acks.append(decoded['ack'])
+                print("got this ack: " + str(decoded['ack']))
+                del sent_packets[int(decoded['ack']) - DATA_SIZE]
+                if len(sent_packets) == 0:
+                    all_recieved = True
+                    break
+
+            except (ValueError, KeyError, TypeError):
+                log("[recv corrupt packet]")
+
+          else:
+            log("[error] timeout")
+            sys.exit(-1)
+
+          if len(sent_packets) == 0:
+              all_recieved = True
+              break
+
+        except:
+          pass
+
+        now = datetime.datetime.now()
+        seconds = (now.hour * 60 + now.minute) * 60 + now.second
+
+    resend()
+  
+
+
+
+def main():
+    global SEQUENCE
+    global last_sent
+    global all_recieved
+    while send_next_packet():
+        pass
+    while(not all_recieved):
+        print("running main")
+        if len(sent_packets) != 0:
+          run()
+        else:
+          all_recieved = True
+    
+    sock.sendto(json.dumps({"eof": True, "data": "",
+                            "sequence": SEQUENCE, "ack": False}), dest)
+    sys.exit(0)
+
+
+main()
+
